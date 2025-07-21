@@ -1,7 +1,14 @@
 import socket
+import threading
+
+ # Коды ответов, запросов:
+     # \x01 -- hello
+     # \x02 -- accept
+     # \x03 -- accept_hello
+
 class Server:
 
-    def __init__(self, host, port, max_users) -> None:
+    def __init__(self, host='127.0.0.1', port=23553, max_users=5) -> None:
         self.host = host
         self.port = port
         self.connections = set()
@@ -12,9 +19,18 @@ class Server:
         self.tcp_socket.listen(max_users)
 
     def send_discover(self):
-        self.udp_socket.sendto(b'\x23\x44', ('255.255.255.255', self.port))
+        print('sending discover')
+        self.udp_socket.sendto(b'\x01', ('255.255.255.255', self.port))
 
     def accept_discover(self):
-        addr, data = self.udp_socket.recv(1024)
-        if data == b'\x23\x44':
-            
+        print('accepting discover')
+        addr, data = self.udp_socket.recvfrom(1024)
+        if data == b'\x01':
+            self.udp_socket.sendto(b'\x02', addr)
+            self.connections.add(addr)
+            addr, data = self.udp_socket.recvfrom(1024)
+            if data != b'\x03':
+
+        elif data == b'\x02':
+            self.connections.add(addr)
+            self.udp_socket.sendto(b'\x03', addr)
