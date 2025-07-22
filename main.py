@@ -3,7 +3,7 @@ import threading
 import pickle
 from server import Server
 
-server = Server('0.0.0.0', 12345)
+server = Server('127.0.0.1', 12345)
 print(server)
 server.send_discover()
-server.accept_discover()
+# server.accept_discover()

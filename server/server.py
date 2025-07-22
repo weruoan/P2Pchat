@@ -16,6 +16,7 @@ class Server:
         self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         self.tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.tcp_socket.bind((host, port))
+        self.udp_socket.bind((host, port))
         self.tcp_socket.listen(max_users)
 
     def send_discover(self):
@@ -30,6 +31,7 @@ class Server:
             self.connections.add(addr)
             addr, data = self.udp_socket.recvfrom(1024)
             if data != b'\x03':
+                self.connections.pop(addr)
 
         elif data == b'\x02':
             self.connections.add(addr)
