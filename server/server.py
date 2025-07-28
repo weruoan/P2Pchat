@@ -3,10 +3,11 @@ import socket
 from time import sleep
 from queue import Queue
 
- # Коды ответов, запросов:
-     # \x01 -- hello
-     # \x02 -- accept
-     # \x03 -- accept_hello
+
+# Коды ответов, запросов:
+# \x01 -- hello
+# \x02 -- accept
+# \x03 -- accept_hello
 
 class Server:
 
@@ -31,9 +32,17 @@ class Server:
         print('accepting discover')
         addr, data = self.udp_socket.recvfrom(1024)
         self.data_queue.put({addr: data})
-        
+    def distributor(self):
+        while True:
+            data = self.data_queue.get()
+            print(data)
+            # if data is None:
+            #     continue
+            # elif data == b'\x01':
+            #     self.add_member()
+
     def add_member(self):
-        print(self.data_queue)
-        
+        print(self.connections)
+
     def show_members(self):
         print(self.connections)
