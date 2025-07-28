@@ -8,6 +8,11 @@ from queue import Queue
 # \x01 -- hello
 # \x02 -- accept
 # \x03 -- accept_hello
+# \x04 -- message
+
+# Струткура сообщения
+# Все сообщений до 1024 байт
+# 1-ый байт -- код ответа (запроса)
 
 class Server:
 
@@ -30,19 +35,23 @@ class Server:
 
     def accept_discover(self):
         print('accepting discover')
-        addr, data = self.udp_socket.recvfrom(1024)
+        data, addr = self.udp_socket.recvfrom(1024)
         self.data_queue.put({addr: data})
+
     def distributor(self):
         while True:
-            data = self.data_queue.get()
-            print(data)
-            # if data is None:
-            #     continue
-            # elif data == b'\x01':
-            #     self.add_member()
+            data: dict = self.data_queue.get()
+            print('data:', data.values())
+            if data is None:
+                print(2)
+                continue
+            elif data.values() == b'\x01':
+                print(1)
+                self.add_member(data.keys()[0])
 
-    def add_member(self):
-        print(self.connections)
+    def add_member(self, member):
+        self.connections.add(member)
+        print('members:', self.connections)
 
     def show_members(self):
         print(self.connections)
