@@ -2,6 +2,7 @@ from operator import add
 import socket
 from time import sleep
 from queue import Queue
+from typing import Dict
 
 
 # Коды ответов, запросов:
@@ -20,8 +21,8 @@ class Server:
         self.host = host
         self.port = port
         self.addr = None
-        self.data_queue = Queue()
-        self.connections = set()
+        self.data_queue: Queue[Dict[tuple[str, int], bytes]] = Queue()
+        self.connections: set[tuple[str, int]] = set()
         self.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         self.tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -40,14 +41,15 @@ class Server:
 
     def distributor(self):
         while True:
-            data: dict = self.data_queue.get()
-            print('data:', data.values())
+            packed_data = self.data_queue.get()
+            addr, data = next(iter(packed_data.items()))
+            print('data:', data, addr)
             if data is None:
                 print(2)
                 continue
-            elif data.values() == b'\x01':
-                print(1)
-                self.add_member(data.keys()[0])
+            elif data == b'\x01':
+                
+                self.add_member(addr)
 
     def add_member(self, member):
         self.connections.add(member)
