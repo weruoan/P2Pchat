@@ -21,7 +21,6 @@ class Server:
         self.host = host
         self.tcp_port = tcp_port
         self.udp_port = udp_port
-        self.addr = None
         self.data_queue: Queue[Dict[tuple[str, int], bytes]] = Queue()
         self.connections: set[tuple[str, int]] = set()
         self.waiting_for_accept: set[tuple[str, int]] = set()
@@ -31,28 +30,27 @@ class Server:
         self.tcp_socket.bind((host, tcp_port))
         self.udp_socket.bind((host, udp_port))
         self.tcp_socket.listen(max_users)
-        
-    
+
+
     def send_discover(self, timeout=5):
         while True:
             print('sending discover')
             self.udp_socket.sendto(b'\x01', ('255.255.255.255', self.udp_port))
             time.sleep(timeout)
-        
-        
+
+
 
     def accept_discover(self, timeout=5):
         while True:
             print('accepting discover')
             data, addr = self.udp_socket.recvfrom(1024)
             self.data_queue.put({addr: data})
-            time.sleep(timeout)
-        
+
     def create_connect(self, addr):
         self.waiting_for_accept.add(addr)
         self.udp_socket.sendto(b'\x02', addr)
-        
-        
+
+
     def distributor(self):
         while True:
             packed_data = self.data_queue.get()
@@ -60,13 +58,18 @@ class Server:
             print('data:', data, addr)
             if data is None:
                 continue
+
             elif data == b'\x01':
-                self.udp_socket.sendto(b'\x01', ('255.255.255.255', self.udp_port))
+                if addr not in self.waiting_for_accept:
+                    self.waiting_for_accept.add(addr)
+                    self.udp_socket.sendto(b'\x02', ('255.255.255.255', self.udp_port))
+
             elif data == b'\x03':
-                self.waiting_for_accept.remove(addr)
-                self.connections.add(addr)
-                print('members:', self.connections)
-            
+                if addr in self.waiting_for_accept:
+                    self.waiting_for_accept.remove(addr)
+                    self.connections.add(addr)
+                    print('members:', self.connections)
+
 
     def add_member(self, member):
         self.connections.add(member)
@@ -74,7 +77,7 @@ class Server:
 
     def show_members(self):
         print(self.connections)
-        
+
     def start(self):
         send_signal = Thread(target=self.send_discover, args=(5,), daemon=True)
         accept_signal = Thread(target=self.accept_discover, args=(1,), daemon=True)
@@ -85,5 +88,3 @@ class Server:
         send_signal.join()
         accept_signal.join()
         distributor.join()
-        
-        
