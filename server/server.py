@@ -23,7 +23,6 @@ class Server:
         self.udp_port = udp_port
         self.data_queue: Queue[Dict[tuple[str, int], bytes]] = Queue()
         self.connections: set[tuple[str, int]] = set()
-        self.waiting_for_accept: set[tuple[str, int]] = set()
         self.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         self.tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -47,8 +46,7 @@ class Server:
             self.data_queue.put({addr: data})
 
     def create_connect(self, addr):
-        self.waiting_for_accept.add(addr)
-        self.udp_socket.sendto(b'\x02', addr)
+        self.tcp_socket.connect(addr)
 
 
     def distributor(self):
@@ -58,17 +56,10 @@ class Server:
             print('data:', data, addr)
             if data is None:
                 continue
-
             elif data == b'\x01':
-                if addr not in self.waiting_for_accept:
-                    self.waiting_for_accept.add(addr)
-                    self.udp_socket.sendto(b'\x02', ('255.255.255.255', self.udp_port))
+                self.add_member(addr)
 
-            elif data == b'\x03':
-                if addr in self.waiting_for_accept:
-                    self.waiting_for_accept.remove(addr)
-                    self.connections.add(addr)
-                    print('members:', self.connections)
+
 
 
     def add_member(self, member):

@@ -1,0 +1,6 @@
+__pycache__
+.venv
+.idea
+.ropeproject
+server/__pycache__
+uv.lock

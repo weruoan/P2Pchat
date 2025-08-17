@@ -1,11 +1,14 @@
 from server import Server
+from rich.console import Console
 
+console = Console()
 
 
 def chat():
     try:
         serverok = Server()
         serverok.start()
+        
     except KeyboardInterrupt:
         print('Остановка программы')
 
