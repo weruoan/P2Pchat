@@ -16,6 +16,7 @@ import time
 
 class Server:
     def __init__(self, host='0.0.0.0', tcp_port=23553, udp_port=23554, max_users=5) -> None:
+        self.scan_ports = [udp_port, 8080, 8081]
         self.host: str = host
         self.tcp_port: int = tcp_port
         self.udp_port: int = udp_port
@@ -32,7 +33,8 @@ class Server:
     def send_discover(self, timeout=15):
         while True:
             # print('sending discover')
-            self.udp_socket.sendto(b'\x01', ('255.255.255.255', self.udp_port))
+            for port in self.scan_ports:
+                self.udp_socket.sendto(b'\x01', ('255.255.255.255', port))
             time.sleep(timeout)
 
 
