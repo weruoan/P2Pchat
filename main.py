@@ -4,7 +4,7 @@ from rich.console import Console
 console = Console()
 
 
-def chat():
+def main():
     try:
         serverok = Server()
         serverok.start()
@@ -14,4 +14,5 @@ def chat():
 
 
 if __name__ == "__main__":
-    chat()
+    main()
+    
