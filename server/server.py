@@ -4,6 +4,7 @@ from typing import Dict
 from server.chat import Chat
 from threading import Thread
 import time
+import threading
 
 # Chat()
 # Коды ответов, запросов:
@@ -15,25 +16,27 @@ import time
 # 1-ый байт -- код ответа (запроса)
 
 class Server:
-    def __init__(self, host='0.0.0.0', tcp_port=23553, udp_port=23554, max_users=5) -> None:
-        self.scan_ports = [udp_port, 8080, 8081]
+    def __init__(self, host='0.0.0.0', udp_port=8080, max_users=5) -> None:
+        self.scan_ports = [8080, 8081, 8082, 8083, 8084]
         self.host: str = host
-        self.tcp_port: int = tcp_port
         self.udp_port: int = udp_port
+        self.tcp_port: int = udp_port + 1
+        self.max_users: int = max_users
         self.data_queue: Queue[Dict[tuple[str, int], bytes]] = Queue()
         self.connections: set[tuple[str, int]] = set()
         self.udp_socket: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         self.tcp_socket: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.tcp_socket.bind((host, tcp_port))
-        self.udp_socket.bind((host, udp_port))
-        self.tcp_socket.listen(max_users)
+        self.udp_socket.bind((self.host, self.udp_port))
+        self.tcp_socket.bind((self.host, self.tcp_port))
+        
 
 
     def send_discover(self, timeout=15):
         while True:
             # print('sending discover')
             for port in self.scan_ports:
+                # print(port)
                 self.udp_socket.sendto(b'\x01', ('255.255.255.255', port))
             time.sleep(timeout)
 
@@ -45,9 +48,13 @@ class Server:
             data, addr = self.udp_socket.recvfrom(1024)
             self.data_queue.put({addr: data})
 
-    def create_connect(self, addr):
-        self.tcp_socket.connect(addr)
+    def create_listen(self, addr):
+        self.udp_socket.sendto(b'\x02', addr)
+        self.tcp_socket.listen(self.max_users)
 
+    def create_connect(self, addr):
+        print(addr)
+        self.tcp_socket.connect((addr[0], addr[1]+1))
 
     def distributor(self):
         while True:
@@ -58,9 +65,10 @@ class Server:
                 continue
             elif data == b'\x01':
                 self.add_member(addr)
-
-
-
+            elif data == b'\x02':
+                waited_chat = Thread(target=self.create_connect, args=(addr,))
+                waited_chat.start()
+                # self.waited_chats.append(waited_chat)
 
     def add_member(self, member):
         self.connections.add(member)
@@ -70,14 +78,12 @@ class Server:
         print(self.connections)
     
     def chat(self):
-        print(*list(enumerate(list(self.connections))))
-        name = 0
-        try:
-            name = int(input('Выбирите к кому подключаться: '))
-        except ValueError:
-            self.chat()
-        self.create_connect(list(self.connections)[name])
-        print(list(self.connections)[int(name)])
+        name = input('Выбирите к кому подключаться: ')
+        while name == '':
+            print(*list(enumerate(list(self.connections))), sep='\n')
+            name = input('Выбирите к кому подключаться: ')
+        self.create_listen(list(self.connections)[int(name)])
+        print('print', int(name), list(self.connections)[int(name)])
     
     def start(self):
         send_signal = Thread(target=self.send_discover, args=(5,), daemon=True)
