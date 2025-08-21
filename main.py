@@ -3,9 +3,7 @@ import argparse
 
 args = argparse.ArgumentParser()
 args.add_argument('--udp-port', type=int, default=8080, help='Port to listen on')
-# args.add_argument('--tcp-port', type=int, default=8081, help='Port to listen on')
 args = args.parse_args()
-# console = Console()
 
 
 def main():

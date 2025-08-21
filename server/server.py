@@ -1,10 +1,8 @@
 import socket
 from queue import Queue
 from typing import Dict
-from server.chat import Chat
 from threading import Thread
 import time
-import threading
 
 # Chat()
 # Коды ответов, запросов:
@@ -34,9 +32,7 @@ class Server:
 
     def send_discover(self, timeout=15):
         while True:
-            # print('sending discover')
             for port in self.scan_ports:
-                # print(port)
                 self.udp_socket.sendto(b'\x01', ('255.255.255.255', port))
             time.sleep(timeout)
 
@@ -44,7 +40,6 @@ class Server:
 
     def accept_discover(self, timeout=5):
         while True:
-            # print('accepting discover')
             data, addr = self.udp_socket.recvfrom(1024)
             self.data_queue.put({addr: data})
 
@@ -55,12 +50,12 @@ class Server:
     def create_connect(self, addr):
         print(addr)
         self.tcp_socket.connect((addr[0], addr[1]+1))
+        print('успешное подключение к ', (addr[0], addr[1]+1))
 
     def distributor(self):
         while True:
             packed_data = self.data_queue.get()
             addr, data = next(iter(packed_data.items()))
-            # print('data:', data, addr)
             if data is None:
                 continue
             elif data == b'\x01':
@@ -68,11 +63,9 @@ class Server:
             elif data == b'\x02':
                 waited_chat = Thread(target=self.create_connect, args=(addr,))
                 waited_chat.start()
-                # self.waited_chats.append(waited_chat)
 
     def add_member(self, member):
         self.connections.add(member)
-        # print('members:', self.connections)
 
     def show_members(self):
         print(self.connections)
