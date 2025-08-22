@@ -10,9 +10,9 @@ def main():
     try:
         serverok = Server(udp_port=args.udp_port)
         serverok.start()
-    except KeyboardInterrupt:
         serverok.tcp_socket.close()
         serverok.udp_socket.close()
+    except KeyboardInterrupt:
         print('Остановка программы')
 
 
