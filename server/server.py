@@ -15,7 +15,9 @@ from server.chat import Chat
 # 1-ый байт -- код ответа (запроса)
 
 class Server:
-    def __init__(self, host='0.0.0.0', udp_port=8080, max_users=5) -> None:
+    def __init__(self, console, host='0.0.0.0', udp_port=8080, max_users=5) -> None:
+        self.approve_connect = None
+        self.console = console
         self.scan_ports = [8080, 8081, 8082, 8083, 8084]
         self.host: str = host
         self.udp_port: int = udp_port
@@ -50,32 +52,39 @@ class Server:
         self.udp_socket.sendto(b'\x02', addr)
         self.tcp_socket.listen(self.max_users)
         client_socket, client_address = self.tcp_socket.accept()
-        print('Успешное подключение', client_address)
+        self.console.print(f'Успешное подключение {client_address}')
         self.send_discover_flag = False
         self.accept_discover_flag = False
         self.send_signal.join(timeout=1)
         self.accept_signal.join(timeout=1)
-        Chat(client_socket)
-        # approve = input(f'Входящее подключение от {client_address}, yes/no: ')
+        Chat(self.console, client_socket)
+        # approve = self.console.input(f'Входящее подключение от {client_address}, yes/no: ')
         # if approve == 'yes':
         #     Chat(client_socket)
         # else:
         #     client_socket.close()
             
 
-    def create_connect(self, addr):
-        # print(addr)
-        approove = input(f'\nЗапрос на подключение от {addr}, yes/no:')
-        if approove == 'yes':
-            self.tcp_socket.connect((addr[0], addr[1]+1))
-        else:
-            return
+    def create_connect(self, addr, timer=60):
+        # self.console.print(addr)
+        now_time = 0
+        # approove = self.console.input()
+        # if approove == 'yes':
+        while now_time < timer:
+            if self.approve_connect == addr[0]:
+                self.tcp_socket.connect((addr[0], addr[1]+1))
+                now_time = timer+1
+            else:
+                time.sleep(1)
+                now_time += 1
+        # else:
+        #     return
         self.send_discover_flag = False
         self.accept_discover_flag = False
         self.send_signal.join(timeout=1)
         self.accept_signal.join(timeout=1)
-        print('успешное подключение к ', (addr[0], addr[1]+1))
-        Chat(self.tcp_socket)
+        self.console.print(f'успешное подключение к {(addr[0], addr[1]+1)}')
+        Chat(self.console, self.tcp_socket)
 
     def distributor(self):
         while True:
@@ -86,6 +95,7 @@ class Server:
             elif data == b'\x01':
                 self.add_member(addr)
             elif data == b'\x02':
+                self.console.print(f'Запрос на подключение {addr}')
                 waited_chat = Thread(target=self.create_connect, args=(addr,))
                 waited_chat.start()
 
@@ -93,17 +103,23 @@ class Server:
         self.connections.add(member)
 
     def show_members(self):
-        print(self.connections)
+        self.console.print(self.connections)
     
     def chat(self):
-        name = input('Выбирите к кому подключаться: ')
+        self.console.input_prompt = 'Выбирите к кому подключаться: '
+        name: str = self.console.input()
         while name == '':
-            print(*list(enumerate(list(self.connections))), sep='\n')
-            name = input('Выбирите к кому подключаться: ')
+            self.console.clear()
+            self.console.print(str(list(enumerate(list(self.connections)))))
+            name = self.console.input()
         if name == '-1':
             return
-        self.create_listen(list(self.connections)[int(name)])
-        # print('print', int(name), list(self.connections)[int(name)])
+        elif name.startswith('/aproove'):
+            self.console.print('aproove')
+            self.approve_connect = name[9:]
+        else:
+            self.create_listen(list(self.connections)[int(name)])
+        # self.console.print('self.console.print', int(name), list(self.connections)[int(name)])
     
     def start(self):
         self.send_signal = Thread(target=self.send_discover, args=(5,), daemon=True)
