@@ -1,11 +1,26 @@
-import curses
-import locale
 import sys
+import locale
+import platform
+
+# Check for Windows and import appropriate curses module
+if platform.system() == "Windows":
+    try:
+        import curses
+    except ImportError:
+        raise ImportError("The 'windows-curses' package is required on Windows. Install it using: pip install windows-curses")
+else:
+    import curses
 
 class Console:
     def __init__(self):
-        # Устанавливаем локаль для корректной обработки Unicode
-        locale.setlocale(locale.LC_ALL, '')
+        # Set locale for proper Unicode handling
+        if platform.system() == "Windows":
+            # Windows-specific encoding to support Unicode
+            locale.setlocale(locale.LC_ALL, '.utf8')
+        else:
+            locale.setlocale(locale.LC_ALL, '')
+
+        # Initialize curses
         self.stdscr = curses.initscr()
         curses.noecho()
         curses.cbreak()
@@ -14,11 +29,19 @@ class Console:
         self.max_rows, self.max_cols = self.stdscr.getmaxyx()
         self.input_buffer = ""
         self.input_prompt = ""
-        self.cursor_pos = 0  # Позиция курсора в буфере
+        self.cursor_pos = 0  # Cursor position in buffer
+
+        # Ensure proper encoding for Windows console
+        if platform.system() == "Windows":
+            try:
+                import ctypes
+                ctypes.windll.kernel32.SetConsoleOutputCP(65001)  # Set console to UTF-8
+            except Exception:
+                pass
 
     def print(self, text):
         if self.current_row < self.max_rows - 1:
-            # Преобразуем текст в строку и обрезаем до ширины экрана
+            # Convert text to string and truncate to screen width
             text = str(text)[:self.max_cols-1]
             try:
                 self.stdscr.addstr(self.current_row, 0, text)
@@ -32,7 +55,7 @@ class Console:
             prompt = self.input_prompt
         self.input_buffer = ""
         self.cursor_pos = 0
-        # Выводим приглашение для ввода
+        # Display input prompt
         try:
             self.stdscr.addstr(self.max_rows-1, 0, prompt[:self.max_cols-1])
         except curses.error:
@@ -40,39 +63,39 @@ class Console:
         self.stdscr.refresh()
         curses.echo()
 
-        col = len(prompt)  # Текущая позиция курсора на экране
+        col = len(prompt)  # Current cursor position on screen
         while True:
             try:
-                self.stdscr.move(self.max_rows-1, col)  # Перемещаем курсор на экране
-                char = self.stdscr.get_wch()  # Используем get_wch для Unicode
-                if char == '\n' or char == '\r':  # Обработка Enter
+                self.stdscr.move(self.max_rows-1, col)  # Move cursor on screen
+                char = self.stdscr.get_wch()  # Use get_wch for Unicode
+                if char in ('\n', '\r'):  # Handle Enter
                     break
-                elif char in (curses.KEY_BACKSPACE, 127, '\b'):  # Обработка Backspace
+                elif char in (curses.KEY_BACKSPACE, 127, '\b'):  # Handle Backspace
                     if self.cursor_pos > 0:
-                        # Удаляем символ перед курсором
+                        # Remove character before cursor
                         self.input_buffer = self.input_buffer[:self.cursor_pos-1] + self.input_buffer[self.cursor_pos:]
                         self.cursor_pos -= 1
                         col = max(len(prompt), col - 1)
-                        # Перерисовываем строку ввода
+                        # Redraw input line
                         self.stdscr.addstr(self.max_rows-1, len(prompt), self.input_buffer + " ")
                         self.stdscr.move(self.max_rows-1, col)
-                elif char == curses.KEY_LEFT:  # Обработка стрелки влево
+                elif char == curses.KEY_LEFT:  # Handle left arrow
                     if self.cursor_pos > 0:
                         self.cursor_pos -= 1
                         col = max(len(prompt), col - 1)
                         self.stdscr.move(self.max_rows-1, col)
-                elif char == curses.KEY_RIGHT:  # Обработка стрелки вправо
+                elif char == curses.KEY_RIGHT:  # Handle right arrow
                     if self.cursor_pos < len(self.input_buffer):
                         self.cursor_pos += 1
                         col = min(self.max_cols - 1, col + 1)
                         self.stdscr.move(self.max_rows-1, col)
-                else:  # Обработка печатных символов
+                else:  # Handle printable characters
                     if isinstance(char, str):
-                        # Вставляем символ в позицию курсора
+                        # Insert character at cursor position
                         self.input_buffer = self.input_buffer[:self.cursor_pos] + char + self.input_buffer[self.cursor_pos:]
                         self.cursor_pos += 1
                         try:
-                            # Перерисовываем строку ввода
+                            # Redraw input line
                             self.stdscr.addstr(self.max_rows-1, len(prompt), self.input_buffer + " ")
                             col = min(self.max_cols - 1, col + 1)
                         except curses.error:
@@ -96,7 +119,10 @@ class Console:
         self.stdscr.refresh()
 
     def __del__(self):
-        curses.nocbreak()
-        self.stdscr.keypad(False)
-        curses.echo()
-        curses.endwin()
+        try:
+            curses.nocbreak()
+            self.stdscr.keypad(False)
+            curses.echo()
+            curses.endwin()
+        except:
+            pass

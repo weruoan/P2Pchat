@@ -1,98 +1,108 @@
-import logging
-import argparse
-from logging.handlers import RotatingFileHandler
-from server import Server, Console
-from datetime import datetime
-import sys
+import streamlit as st
+import asyncio
+import socket
+import threading
+import json
+import time
 
+# Initialize session state for chat history and peer info
+if 'messages' not in st.session_state:
+    st.session_state.messages = []
+if 'peers' not in st.session_state:
+    st.session_state.peers = []
+if 'username' not in st.session_state:
+    st.session_state.username = None
 
-# Настройка логгера
-def setup_logger():
-    # Создаем логгер
-    logger = logging.getLogger('ServerApp')
-    logger.setLevel(logging.DEBUG)
+# P2P Server to listen for incoming messages
+async def p2p_server(host='127.0.0.1', port=12345):
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind((host, port))
+    server.listen(5)
+    server.setblocking(False)
+    loop = asyncio.get_event_loop()
 
-    # Форматтер для логов
-    log_format = logging.Formatter(
-        '%(asctime)s [%(levelname)s] - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
+    st.write(f"Server running on {host}:{port}")
 
-    # Обработчик для файла с ротацией (максимум 5МБ, 3 резервные копии)
-    file_handler = RotatingFileHandler(
-        filename=f'server_{datetime.now().strftime("%Y%m%d")}.log',
-        maxBytes=5 * 1024 * 1024,  # 5MB
-        backupCount=3,
-        encoding='utf-8'
-    )
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(log_format)
+    while True:
+        client, addr = await loop.sock_accept(server)
+        loop.create_task(handle_client(client, addr))
 
-    # Обработчик для консоли с цветами
-    class ColoredFormatter(logging.Formatter):
-        COLORS = {
-            'DEBUG': '\033[94m',  # Синий
-            'INFO': '\033[92m',  # Зеленый
-            'WARNING': '\033[93m',  # Желтый
-            'ERROR': '\033[91m',  # Красный
-            'CRITICAL': '\033[95m'  # Фиолетовый
-        }
-        RESET = '\033[0m'
+# Handle incoming client messages
+async def handle_client(client, addr):
+    loop = asyncio.get_event_loop()
+    while True:
+        try:
+            data = await loop.sock_recv(client, 1024)
+            if not data:
+                break
+            message = json.loads(data.decode())
+            st.session_state.messages.append(f"{message['username']} ({addr[0]}:{addr[1]}): {message['text']}")
+            st.rerun()  # Refresh Streamlit to update chat
+        except:
+            break
+    client.close()
 
-        def format(self, record):
-            color = self.COLORS.get(record.levelname, '')
-            message = super().format(record)
-            return f"{color}{message}{self.RESET}"
-
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(ColoredFormatter(
-        '%(asctime)s [%(levelname)s] - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    ))
-
-    # Добавляем оба обработчика к логгеру
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
-
-    return logger
-
-
-# Парсер аргументов командной строки
-parser = argparse.ArgumentParser(description='UDP/TCP Server')
-parser.add_argument('--udp-port', type=int, default=8080, help='Port to listen on')
-args = parser.parse_args()
-
-
-def main():
-    # Инициализация логгера
-    logger = setup_logger()
-    logger.info("Starting server application")
-
+# Send message to a peer
+async def send_message(peer_host, peer_port, username, message):
     try:
-        console = Console()
-        logger.debug("Console initialized")
+        client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        client.settimeout(2)
+        client.connect((peer_host, peer_port))
+        data = json.dumps({'username': username, 'text': message})
+        client.send(data.encode())
+        client.close()
+        st.session_state.messages.append(f"You ({username}): {message}")
+        st.rerun()
+    except Exception as e:
+        st.error(f"Failed to send message to {peer_host}:{peer_port}: {e}")
 
-        serverok = Server(console=console, udp_port=args.udp_port)
-        logger.info(f"Server initialized on UDP port {args.udp_port}")
+# Start the P2P server in a separate thread
+def start_server():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(p2p_server())
 
-        serverok.start()
-        logger.info("Server started successfully")
+# Streamlit UI
+st.title("P2P Chat Application")
 
-    except KeyboardInterrupt:
-        logger.warning("Received KeyboardInterrupt, shutting down")
-        serverok.tcp_socket.close()
-        logger.debug("TCP socket closed")
-        serverok.udp_socket.close()
-        logger.debug("UDP socket closed")
-        del console
-        logger.info("Console object deleted")
-        logger.info("Program stopped")
+# Username input
+if not st.session_state.username:
+    username = st.text_input("Enter your username:")
+    if username:
+        st.session_state.username = username
+        st.rerun()
 
-    except Exception as error:
-        logger.error(f"An error occurred: {str(error)}", exc_info=True)
-        logger.critical("Server stopped due to unexpected error")
+if st.session_state.username:
+    # Start P2P server if not already running
+    if not hasattr(st, 'server_started'):
+        threading.Thread(target=start_server, daemon=True).start()
+        st.server_started = True
 
+    # Peer connection input
+    st.subheader("Connect to a Peer")
+    peer_host = st.text_input("Peer Host (e.g., 127.0.0.1):")
+    peer_port = st.number_input("Peer Port (e.g., 12345):", min_value=1024, max_value=65535, step=1)
+    if st.button("Add Peer"):
+        if peer_host and peer_port:
+            st.session_state.peers.append((peer_host, peer_port))
+            st.success(f"Added peer {peer_host}:{peer_port}")
 
-if __name__ == "__main__":
-    main()
+    # Display connected peers
+    if st.session_state.peers:
+        st.subheader("Connected Peers")
+        for peer in st.session_state.peers:
+            st.write(f"{peer[0]}:{peer[1]}")
+
+    # Chat input
+    st.subheader("Chat")
+    message = st.text_input("Your message:")
+    if st.button("Send"):
+        if message:
+            for peer_host, peer_port in st.session_state.peers:
+                asyncio.run(send_message(peer_host, peer_port, st.session_state.username, message))
+
+    # Display chat history
+    st.subheader("Messages")
+    for msg in st.session_state.messages:
+        st.write(msg)
