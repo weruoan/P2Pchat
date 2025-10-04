@@ -30,8 +30,8 @@ pip install fastapi uvicorn requests streamlit cryptography
 ## Установка и запуск
 1. **Клонируйте репозиторий**:
    ```bash
-   git clone <repository_url>
-   cd <repository_name>
+   git clone https://github.com/weruoan/P2Pchat.git
+   cd P2Pchat
    ```
 
 2. **Запустите сервер**:
