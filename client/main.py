@@ -5,6 +5,7 @@ import json
 import hashlib
 import base64
 import os
+import bcrypt
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding, serialization, hashes, asymmetric
 from cryptography.hazmat.backends import default_backend
@@ -41,6 +42,99 @@ if "creator_ecdh_public_key" not in st.session_state:
     st.session_state.creator_ecdh_public_key = None
 if "input_text" not in st.session_state:
     st.session_state.input_text = ""
+
+def _post_register(endpoint: str, server_ip: str,username: str, chat_name: str, chat_password: str) -> bool:
+    
+    
+    ecdh_private_key, ecdh_pub_key = generate_ecdh_keys()
+    if endpoint == "register":
+        st.session_state.chat_hash = bcrypt.hashpw(chat_password.encode("utf-8") , bcrypt.gensalt()).decode('utf-8')
+        chat_hash = st.session_state.chat_hash
+        print(chat_hash)
+        response = requests.post(
+            f"http://{server_ip}:8000/register",
+            json={
+                "username": username,
+                "chat_name": chat_name,
+                "chat_hash": chat_hash,
+                "ecdh_public_key": ecdh_pub_key
+            }
+        )
+    elif endpoint == "join":
+        response = requests.post(
+            f"http://{server_ip}:8000/join",
+            json={
+                "username": username,
+                "chat_name": chat_name,
+                "chat_password": chat_password,
+                "ecdh_public_key": ecdh_pub_key
+            }
+        )
+    if response.status_code != 200:
+        st.error(f"Ошибка: {response.json().get('detail', 'Неизвестная ошибка')}, Response: {response}")
+        return False
+
+    data = response.json()
+
+    # session_state
+    st.session_state.update({
+        "username": username,
+        "server_ip": server_ip,
+        "chat_name": chat_name,
+        "chat_password": chat_password,
+        "chat_hash": st.session_state.chat_hash,
+        "ecdh_private_key": ecdh_private_key,
+        "ecdh_public_key": ecdh_pub_key,
+        "connected": True,
+        "is_creator": data.get("is_creator", False),
+        "creator_ecdh_public_key": data.get("creator_ecdh_public_key"),
+        "last_timestamp": time.time()
+    })
+
+    # 🔐 если создатель — генерируем session key
+    if st.session_state.is_creator:
+        session_key = generate_session_key()
+        st.session_state.session_key = session_key
+
+        shared_secret = ecdh_private_key.exchange(
+            ec.ECDH(),
+            serialization.load_pem_public_key(ecdh_pub_key.encode())
+        )
+
+        encrypted_session_key = encrypt_with_shared_secret(
+            session_key, shared_secret
+        )
+
+        requests.post(
+            f"http://{server_ip}:8000/set_session_key",
+            json={
+                "username": username,
+                "chat_name": chat_name,
+                "chat_hash": chat_hash,
+                "target_username": username,
+                "encrypted_session_key": encrypted_session_key
+            }
+        )
+
+    # 🔓 если обычный участник — расшифровываем ключ
+    elif data.get("encrypted_session_key"):
+        creator_pub = serialization.load_pem_public_key(
+            st.session_state.creator_ecdh_public_key.encode()
+        )
+        shared_secret = ecdh_private_key.exchange(ec.ECDH(), creator_pub)
+        st.session_state.session_key = decrypt_with_shared_secret(
+            data["encrypted_session_key"], shared_secret
+        )
+
+    return True
+
+
+def create_room(server_ip, username, chat_name, chat_password) -> bool:
+    return _post_register("register", server_ip, username, chat_name, chat_password)
+
+
+def join_room(server_ip, username, chat_name, chat_password) -> bool:
+    return _post_register("join", server_ip, username, chat_name, chat_password)
 
 
 def generate_ecdh_keys():
@@ -131,75 +225,75 @@ def get_public_keys():
         return {}
 
 
-def register_user(server_ip: str, username: str, chat_name: str, chat_password: str) -> bool:
-    """Регистрирует пользователя в комнате на сервере"""
-    chat_hash = hashlib.sha256(chat_password.encode('utf-8')).hexdigest()
-    ecdh_private_key, ecdh_pub_key = generate_ecdh_keys()
+# def register_user(server_ip: str, username: str, chat_name: str, chat_password: str) -> bool:
+#     """Регистрирует пользователя в комнате на сервере"""
+#     chat_hash = hashlib.sha256(chat_password.encode('utf-8')).hexdigest()
+#     ecdh_private_key, ecdh_pub_key = generate_ecdh_keys()
 
-    try:
-        response = requests.post(
-            f"http://{server_ip}:8000/register",
-            json={
-                "username": username,
-                "chat_name": chat_name,
-                "chat_hash": chat_hash,
-                "ecdh_public_key": ecdh_pub_key
-            }
-        )
-        if response.status_code == 200:
-            data = response.json()
-            st.session_state.username = username
-            st.session_state.server_ip = server_ip
-            st.session_state.chat_name = chat_name
-            st.session_state.chat_password = chat_password
-            st.session_state.chat_hash = chat_hash
-            st.session_state.ecdh_private_key = ecdh_private_key
-            st.session_state.ecdh_public_key = ecdh_pub_key
-            st.session_state.connected = True
-            st.session_state.is_creator = data.get("is_creator", False)
-            st.session_state.creator_ecdh_public_key = data.get("creator_ecdh_public_key")
-            st.session_state.last_timestamp = time.time()
+#     try:
+#         response = requests.post(
+#             f"http://{server_ip}:8000/register",
+#             json={
+#                 "username": username,
+#                 "chat_name": chat_name,
+#                 "chat_hash": chat_hash,
+#                 "ecdh_public_key": ecdh_pub_key
+#             }
+#         )
+#         if response.status_code == 200:
+#             data = response.json()
+#             st.session_state.username = username
+#             st.session_state.server_ip = server_ip
+#             st.session_state.chat_name = chat_name
+#             st.session_state.chat_password = chat_password
+#             st.session_state.chat_hash = chat_hash
+#             st.session_state.ecdh_private_key = ecdh_private_key
+#             st.session_state.ecdh_public_key = ecdh_pub_key
+#             st.session_state.connected = True
+#             st.session_state.is_creator = data.get("is_creator", False)
+#             st.session_state.creator_ecdh_public_key = data.get("creator_ecdh_public_key")
+#             st.session_state.last_timestamp = time.time()
 
-            # Если это создатель, генерируем сессионный ключ
-            if st.session_state.is_creator:
-                session_key = generate_session_key()
-                st.session_state.session_key = session_key
-                # Шифруем ключ для себя
-                shared_secret = st.session_state.ecdh_private_key.exchange(
-                    ec.ECDH(),
-                    serialization.load_pem_public_key(st.session_state.ecdh_public_key.encode('utf-8'))
-                )
-                encrypted_session_key = encrypt_with_shared_secret(session_key, shared_secret)
-                requests.post(
-                    f"http://{server_ip}:8000/set_session_key",
-                    json={
-                        "username": username,
-                        "chat_name": chat_name,
-                        "chat_hash": chat_hash,
-                        "target_username": username,
-                        "encrypted_session_key": encrypted_session_key
-                    }
-                )
-            # Если не создатель, пытаемся получить зашифрованный ключ
-            if data.get("encrypted_session_key"):
-                try:
-                    creator_public_key = serialization.load_pem_public_key(
-                        st.session_state.creator_ecdh_public_key.encode('utf-8')
-                    )
-                    shared_secret = st.session_state.ecdh_private_key.exchange(ec.ECDH(), creator_public_key)
-                    session_key = decrypt_with_shared_secret(data["encrypted_session_key"], shared_secret)
-                    st.session_state.session_key = session_key
-                except Exception as e:
-                    st.error(f"Ошибка расшифровки сессионного ключа: {e}")
-                    return False
+#             # Если это создатель, генерируем сессионный ключ
+#             if st.session_state.is_creator:
+#                 session_key = generate_session_key()
+#                 st.session_state.session_key = session_key
+#                 # Шифруем ключ для себя
+#                 shared_secret = st.session_state.ecdh_private_key.exchange(
+#                     ec.ECDH(),
+#                     serialization.load_pem_public_key(st.session_state.ecdh_public_key.encode('utf-8'))
+#                 )
+#                 encrypted_session_key = encrypt_with_shared_secret(session_key, shared_secret)
+#                 requests.post(
+#                     f"http://{server_ip}:8000/set_session_key",
+#                     json={
+#                         "username": username,
+#                         "chat_name": chat_name,
+#                         "chat_hash": chat_hash,
+#                         "target_username": username,
+#                         "encrypted_session_key": encrypted_session_key
+#                     }
+#                 )
+#             # Если не создатель, пытаемся получить зашифрованный ключ
+#             if data.get("encrypted_session_key"):
+#                 try:
+#                     creator_public_key = serialization.load_pem_public_key(
+#                         st.session_state.creator_ecdh_public_key.encode('utf-8')
+#                     )
+#                     shared_secret = st.session_state.ecdh_private_key.exchange(ec.ECDH(), creator_public_key)
+#                     session_key = decrypt_with_shared_secret(data["encrypted_session_key"], shared_secret)
+#                     st.session_state.session_key = session_key
+#                 except Exception as e:
+#                     st.error(f"Ошибка расшифровки сессионного ключа: {e}")
+#                     return False
 
-            return True
-        else:
-            st.error(f"Ошибка регистрации: {response.json().get('detail', 'Неизвестная ошибка')}")
-            return False
-    except Exception as e:
-        st.error(f"Ошибка подключения: {e}")
-        return False
+#             return True
+#         else:
+#             st.error(f"Ошибка регистрации: {response.json().get('detail', 'Неизвестная ошибка')}")
+#             return False
+#     except Exception as e:
+#         st.error(f"Ошибка подключения: {e}")
+#         return False
 
 
 def send_message(message: str):
@@ -215,6 +309,7 @@ def send_message(message: str):
                 "username": st.session_state.username,
                 "chat_name": st.session_state.chat_name,
                 "chat_hash": st.session_state.chat_hash,
+                "chat_password": st.session_state.chat_password,
                 "ciphertext": ciphertext
             }
         )
@@ -236,6 +331,7 @@ def get_updates():
                 "username": st.session_state.username,
                 "chat_name": st.session_state.chat_name,
                 "chat_hash": st.session_state.chat_hash,
+                "chat_password": st.session_state.chat_password,
                 "last_timestamp": st.session_state.last_timestamp
             }
         )
@@ -294,17 +390,31 @@ def main():
 
     # Форма подключения
     if not st.session_state.connected:
-        with st.form("connect_form"):
-            server_ip = st.text_input("IP сервера", value="127.0.0.1")
-            username = st.text_input("Ваше имя")
-            chat_name = st.text_input("ID чата")
-            chat_password = st.text_input("Пароль", type="password")
-            connect_button = st.form_submit_button("Подключиться")
+        tab_create, tab_join = st.tabs(["➕ Создать комнату", "➡️ Присоединиться"])
 
-            if connect_button and username and chat_name and chat_password:
-                if register_user(server_ip, username, chat_name, chat_password):
+        with tab_create:
+            st.subheader("Создание комнаты")
+            server_ip = st.text_input("Server IP", key="c_server", value="127.0.0.1")
+            username = st.text_input("Username", key="c_user")
+            chat_name = st.text_input("Chat name", key="c_chat")
+            chat_password = st.text_input("Chat password", type="password", key="c_pass")
+
+            if st.button("Создать"):
+                if create_room(server_ip, username, chat_name, chat_password):
+                    st.success("Комната создана и вы подключены")
+                    st.rerun()        
+
+        with tab_join:
+            st.subheader("Подключение к комнате")
+            server_ip = st.text_input("Server IP", key="j_server", value="127.0.0.1")
+            username = st.text_input("Username", key="j_user")
+            chat_name = st.text_input("Chat name", key="j_chat")
+            chat_password = st.text_input("Chat password", type="password", key="j_pass")
+
+            if st.button("Подключиться"):
+                if join_room(server_ip, username, chat_name, chat_password):
                     st.success(f"Подключено как {username} в комнату {chat_name}")
-                    st.rerun()
+                    st.rerun()       
     else:
         # Периодическое обновление
         get_updates()

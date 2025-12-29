@@ -6,6 +6,7 @@ import uvicorn
 import time
 import hashlib
 import base64
+import bcrypt
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives import padding, serialization, hashes, asymmetric
@@ -32,6 +33,12 @@ class UserRegistration(BaseModel):
     ecdh_public_key: str
 
 
+class UserJoin(BaseModel):
+    username: str
+    chat_name: str
+    chat_password: str
+    ecdh_public_key: str
+
 class Message(BaseModel):
     username: str
     chat_name: str
@@ -49,7 +56,7 @@ class ChatUpdate(BaseModel):
 class SessionKeyUpdate(BaseModel):
     username: str
     chat_name: str
-    chat_hash: str
+    chat_password: str
     target_username: str
     encrypted_session_key: str
 
@@ -59,43 +66,74 @@ class PublicKeysRequest(BaseModel):
     chat_name: str
     chat_hash: str
 
-
 @app.post("/register")
-async def register_user(user: UserRegistration):
-    """Регистрирует пользователя в комнате"""
-    is_creator = False
-    # Если комната не существует, создаем её
-    if user.chat_name not in rooms:
-        is_creator = True
-        rooms[user.chat_name] = {
-            "password_hash": user.chat_hash,
-            "session_keys": {},
-            "creator": user.username,
-            "creator_ecdh_public_key": user.ecdh_public_key,
-            "clients": {},
-            "ecdh_public_keys": {},
-            "messages": []
-        }
-    # Проверяем хэш пароля
-    if rooms[user.chat_name]["password_hash"] != user.chat_hash:
-        raise HTTPException(status_code=403, detail="Неверный хэш пароля комнаты")
+async def register_room(user: UserRegistration):
+    """Создаёт новую комнату и регистрирует создателя"""
+    
+    if user.chat_name in rooms:
+        raise HTTPException(
+            status_code=400,
+            detail="Комната уже существует"
+        )
 
-    # Проверяем, не занят ли username в этой комнате
-    if user.username in rooms[user.chat_name]["clients"]:
-        raise HTTPException(status_code=400, detail="Пользователь уже существует в этой комнате")
+    rooms[user.chat_name] = {
+        "password_hash": user.chat_hash,
+        "session_keys": {},
+        "creator": user.username,
+        "creator_ecdh_public_key": user.ecdh_public_key,
+        "clients": {},
+        "ecdh_public_keys": {},
+        "messages": []
+    }
 
-    # Регистрируем пользователя
     rooms[user.chat_name]["clients"][user.username] = time.time()
     rooms[user.chat_name]["ecdh_public_keys"][user.username] = user.ecdh_public_key
 
-    # Возвращаем статус и публичный ключ создателя
     return {
         "status": "success",
         "username": user.username,
         "chat_name": user.chat_name,
-        "is_creator": is_creator,
-        "creator_ecdh_public_key": rooms[user.chat_name]["creator_ecdh_public_key"],
-        "encrypted_session_key": rooms[user.chat_name]["session_keys"].get(user.username)
+        "is_creator": True,
+        "creator_ecdh_public_key": user.ecdh_public_key,
+        "encrypted_session_key": None
+    }
+
+
+@app.post("/join")
+async def join_room(user: UserJoin):
+    """Подключает пользователя к существующей комнате"""
+
+    if user.chat_name not in rooms:
+        raise HTTPException(
+            status_code=404,
+            detail="Комната не существует"
+        )
+
+    room = rooms[user.chat_name]
+    print(room["password_hash"])
+    print(user.chat_password.encode('utf-8'))
+    if not bcrypt.checkpw(user.chat_password.encode('utf-8'), room["password_hash"].encode('utf-8')):
+        raise HTTPException(
+            status_code=403,
+            detail="Неверный хэш пароля комнаты"
+        )
+
+    if user.username in room["clients"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Пользователь уже существует в этой комнате"
+        )
+
+    room["clients"][user.username] = time.time()
+    room["ecdh_public_keys"][user.username] = user.ecdh_public_key
+
+    return {
+        "status": "success",
+        "username": user.username,
+        "chat_name": user.chat_name,
+        "is_creator": False,
+        "creator_ecdh_public_key": room["creator_ecdh_public_key"],
+        "encrypted_session_key": room["session_keys"].get(user.username)
     }
 
 
@@ -103,14 +141,14 @@ async def register_user(user: UserRegistration):
 async def set_session_key(data: SessionKeyUpdate):
     """Устанавливает зашифрованный сессионный ключ для пользователя (только для создателя)"""
     chat_name = data.chat_name
-    chat_hash = data.chat_hash
+    chat_password= data.chat_password
     username = data.username
     target_username = data.target_username
     encrypted_session_key = data.encrypted_session_key
 
     if chat_name not in rooms:
         raise HTTPException(status_code=404, detail="Комната не найдена")
-    if rooms[chat_name]["password_hash"] != chat_hash:
+    if not bcrypt.checkpw(chat_password.encode('utf-8'), rooms[chat_name]["password_hash"].encode('utf-8')):
         raise HTTPException(status_code=403, detail="Неверный хэш пароля комнаты")
     if rooms[chat_name]["creator"] != username:
         raise HTTPException(status_code=403, detail="Только создатель может установить сессионный ключ")
