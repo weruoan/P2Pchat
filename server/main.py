@@ -43,6 +43,7 @@ class Message(BaseModel):
     username: str
     chat_name: str
     chat_hash: str
+    chat_password: str
     ciphertext: str
 
 
@@ -50,13 +51,14 @@ class ChatUpdate(BaseModel):
     username: str
     chat_name: str
     chat_hash: str
+    chat_password: str
     last_timestamp: float
 
 
 class SessionKeyUpdate(BaseModel):
     username: str
     chat_name: str
-    chat_password: str
+    chat_hash: str
     target_username: str
     encrypted_session_key: str
 
@@ -110,8 +112,6 @@ async def join_room(user: UserJoin):
         )
 
     room = rooms[user.chat_name]
-    print(room["password_hash"])
-    print(user.chat_password.encode('utf-8'))
     if not bcrypt.checkpw(user.chat_password.encode('utf-8'), room["password_hash"].encode('utf-8')):
         raise HTTPException(
             status_code=403,
@@ -141,14 +141,14 @@ async def join_room(user: UserJoin):
 async def set_session_key(data: SessionKeyUpdate):
     """Устанавливает зашифрованный сессионный ключ для пользователя (только для создателя)"""
     chat_name = data.chat_name
-    chat_password= data.chat_password
+    chat_hash = data.chat_hash
     username = data.username
     target_username = data.target_username
     encrypted_session_key = data.encrypted_session_key
 
     if chat_name not in rooms:
         raise HTTPException(status_code=404, detail="Комната не найдена")
-    if not bcrypt.checkpw(chat_password.encode('utf-8'), rooms[chat_name]["password_hash"].encode('utf-8')):
+    if chat_hash != rooms[chat_name]["password_hash"]:
         raise HTTPException(status_code=403, detail="Неверный хэш пароля комнаты")
     if rooms[chat_name]["creator"] != username:
         raise HTTPException(status_code=403, detail="Только создатель может установить сессионный ключ")
@@ -164,8 +164,12 @@ async def send_message(message: Message):
     """Сохраняет зашифрованное сообщение в комнате"""
     if message.chat_name not in rooms:
         raise HTTPException(status_code=404, detail="Комната не найдена")
-    if rooms[message.chat_name]["password_hash"] != message.chat_hash:
-        raise HTTPException(status_code=403, detail="Неверный хэш пароля комнаты")
+    if message.chat_password:
+        if not bcrypt.checkpw(message.chat_password.encode('utf-8'), rooms[message.chat_name]["password_hash"].encode('utf-8')):
+            raise HTTPException(status_code=403, detail="Неверный хэш пароля комнаты")
+    else:
+        if rooms[message.chat_name]["password_hash"] != message.chat_hash:
+            raise HTTPException(status_code=403, detail="Неверный хэш пароля комнаты")
     if message.username not in rooms[message.chat_name]["clients"]:
         raise HTTPException(status_code=400, detail="Пользователь не зарегистрирован в комнате")
     if message.username not in rooms[message.chat_name]["session_keys"]:
@@ -188,8 +192,13 @@ async def get_updates(update: ChatUpdate):
     """Возвращает обновления для комнаты"""
     if update.chat_name not in rooms:
         raise HTTPException(status_code=404, detail="Комната не найдена")
-    if rooms[update.chat_name]["password_hash"] != update.chat_hash:
-        raise HTTPException(status_code=403, detail="Неверный хэш пароля комнаты")
+    if update.chat_password:
+        if not bcrypt.checkpw(update.chat_password.encode('utf-8'), rooms[update.chat_name]["password_hash"].encode('utf-8')):
+            raise HTTPException(status_code=403, detail="Неверный парольы комнаты")
+    else:
+        if rooms[update.chat_name]["password_hash"] != update.chat_hash:
+            
+            raise HTTPException(status_code=403, detail="Неверный хэш пароля комнаты")
     if update.username not in rooms[update.chat_name]["clients"]:
         raise HTTPException(status_code=400, detail="Пользователь не зарегистрирован в комнате")
 
@@ -224,14 +233,13 @@ async def get_updates(update: ChatUpdate):
 
 @app.post("/get_public_keys")
 async def get_public_keys(request: PublicKeysRequest):
-    """Возвращает публичные ключи ECDH всех пользователей в комнате (только для тех, кто знает пароль)"""
+    """Возвращает публичные ключи ECDH всех пользователей в комнате (только для creator)"""
     if request.chat_name not in rooms:
         raise HTTPException(status_code=404, detail="Комната не найдена")
     if rooms[request.chat_name]["password_hash"] != request.chat_hash:
         raise HTTPException(status_code=403, detail="Неверный хэш пароля комнаты")
     if request.username not in rooms[request.chat_name]["clients"]:
         raise HTTPException(status_code=400, detail="Пользователь не зарегистрирован в комнате")
-
     return {
         "status": "success",
         "ecdh_public_keys": rooms[request.chat_name]["ecdh_public_keys"]
