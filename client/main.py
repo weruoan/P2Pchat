@@ -51,23 +51,25 @@ def _post_register(endpoint: str, server_ip: str,username: str, chat_name: str, 
         st.session_state.chat_hash = bcrypt.hashpw(chat_password.encode("utf-8") , bcrypt.gensalt()).decode('utf-8')
         chat_hash = st.session_state.chat_hash
         response = requests.post(
-            f"http://{server_ip}:8000/register",
+            f"https://{server_ip}:8000/register",
             json={
                 "username": username,
                 "chat_name": chat_name,
                 "chat_hash": chat_hash,
                 "ecdh_public_key": ecdh_pub_key
-            }
+            },
+            verify=False
         )
     elif endpoint == "join":
         response = requests.post(
-            f"http://{server_ip}:8000/join",
+            f"https://{server_ip}:8000/join",
             json={
                 "username": username,
                 "chat_name": chat_name,
                 "chat_password": chat_password,
                 "ecdh_public_key": ecdh_pub_key
-            }
+            },
+            verify=False
         )
     if response.status_code != 200:
         st.error(f"Ошибка: {response.json().get('detail', 'Неизвестная ошибка')}, Response: {response}")
@@ -105,14 +107,15 @@ def _post_register(endpoint: str, server_ip: str,username: str, chat_name: str, 
         )
 
         requests.post(
-            f"http://{server_ip}:8000/set_session_key",
+            f"https://{server_ip}:8000/set_session_key",
             json={
                 "username": username,
                 "chat_name": chat_name,
                 "chat_hash": chat_hash,
                 "target_username": username,
                 "encrypted_session_key": encrypted_session_key
-            }
+            },
+            verify=False
         )
 
     # 🔓 если обычный участник — расшифровываем ключ
@@ -207,12 +210,13 @@ def get_public_keys():
         return {}
     try:
         response = requests.post(
-            f"http://{st.session_state.server_ip}:8000/get_public_keys",
+            f"https://{st.session_state.server_ip}:8000/get_public_keys",
             json={
                 "username": st.session_state.username,
                 "chat_name": st.session_state.chat_name,
                 "chat_hash": st.session_state.chat_hash
-            }
+            },
+            verify=False
         )
         if response.status_code == 200:
             return response.json().get("ecdh_public_keys", {})
@@ -248,8 +252,9 @@ def send_message(message: str):
                 "ciphertext": ciphertext
             }
         response = requests.post(
-            f"http://{st.session_state.server_ip}:8000/send_message",
-            json=response_json
+            f"https://{st.session_state.server_ip}:8000/send_message",
+            json=response_json,
+            verify=False
         )
         if response.status_code != 200:
             st.error(f"Ошибка отправки сообщения: {response.json().get('detail', 'Неизвестная ошибка')}")
@@ -280,8 +285,9 @@ def get_updates():
                 "last_timestamp": st.session_state.last_timestamp
             }
         response = requests.post(
-            f"http://{st.session_state.server_ip}:8000/get_updates",
-            json=response_json
+            f"https://{st.session_state.server_ip}:8000/get_updates",
+            json=response_json,
+            verify=False
         )
         if response.status_code == 200:
             data = response.json()
@@ -302,14 +308,15 @@ def get_updates():
                             encrypted_session_key = encrypt_with_shared_secret(st.session_state.session_key,
                                                                                shared_secret)
                             requests.post(
-                                f"http://{st.session_state.server_ip}:8000/set_session_key",
+                                f"https://{st.session_state.server_ip}:8000/set_session_key",
                                 json={
                                     "username": st.session_state.username,
                                     "chat_name": st.session_state.chat_name,
                                     "chat_hash": st.session_state.chat_hash,
                                     "target_username": user,
                                     "encrypted_session_key": encrypted_session_key
-                                }
+                                },
+                                verify=False
                             )
                         except Exception as e:
                             st.error(f"Ошибка шифрования ключа для {user}: {e}")
