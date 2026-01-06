@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from typing import List, Dict
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,6 +7,7 @@ import time
 import hashlib
 import base64
 import bcrypt
+import json
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives import padding, serialization, hashes, asymmetric
@@ -22,8 +23,40 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Хранилище комнат: {chat_name: {"password_hash": str, "session_keys": {username: encrypted_session_key}, "creator": str, "creator_ecdh_public_key": str, "clients": {username: last_active}, "ecdh_public_keys": {username: public_key}, "messages": [{sender, ciphertext, timestamp}]}}
+# Хранилище комнат: {chat_name: {"password_hash": str, "session_keys": {username: encrypted_session_key}, "creator": str, "creator_ecdh_public_key": str, "clients": {username: last_active}, "ecdh_public_keys": {username: public_key}, "connections": {username: websocket}, "messages": [{sender, ciphertext, timestamp}]}}
 rooms: Dict[str, Dict] = {}
+
+
+async def _broadcast_users(room: Dict) -> None:
+    payload = json.dumps({
+        "type": "users",
+        "users": list(room["clients"].keys())
+    })
+    dead_users = []
+    for target_user, ws in room["connections"].items():
+        try:
+            await ws.send_text(payload)
+        except Exception:
+            dead_users.append(target_user)
+    for dead in dead_users:
+        room["connections"].pop(dead, None)
+
+
+async def _send_key_request(room: Dict, target_username: str) -> None:
+    creator = room.get("creator")
+    if not creator:
+        return
+    creator_ws = room["connections"].get(creator)
+    if not creator_ws:
+        return
+    public_key = room["ecdh_public_keys"].get(target_username)
+    if not public_key:
+        return
+    await creator_ws.send_text(json.dumps({
+        "type": "key_request",
+        "target_username": target_username,
+        "public_key": public_key
+    }))
 
 
 class UserRegistration(BaseModel):
@@ -63,10 +96,21 @@ class SessionKeyUpdate(BaseModel):
     encrypted_session_key: str
 
 
+class SessionKeysBatchUpdate(BaseModel):
+    username: str
+    chat_name: str
+    chat_hash: str
+    encrypted_session_keys: Dict[str, str]
+
+
 class PublicKeysRequest(BaseModel):
     username: str
     chat_name: str
     chat_hash: str
+
+# class GetVerify(BaseModel):
+#     username: str
+#     chat_name: str
 
 @app.post("/register")
 async def register_room(user: UserRegistration):
@@ -85,7 +129,10 @@ async def register_room(user: UserRegistration):
         "creator_ecdh_public_key": user.ecdh_public_key,
         "clients": {},
         "ecdh_public_keys": {},
-        "messages": []
+        "connections": {},
+        "messages": [],
+        # "secrets": {}
+
     }
 
     rooms[user.chat_name]["clients"][user.username] = time.time()
@@ -156,6 +203,40 @@ async def set_session_key(data: SessionKeyUpdate):
         raise HTTPException(status_code=400, detail="Целевой пользователь не зарегистрирован")
 
     rooms[chat_name]["session_keys"][target_username] = encrypted_session_key
+    target_ws = rooms[chat_name]["connections"].get(target_username)
+    if target_ws:
+        await target_ws.send_text(json.dumps({
+            "type": "session_key",
+            "encrypted_session_key": encrypted_session_key
+        }))
+    return {"status": "success"}
+
+
+@app.post("/set_session_keys")
+async def set_session_keys(data: SessionKeysBatchUpdate):
+    """Устанавливает пачку зашифрованных сессионных ключей (только для создателя)"""
+    chat_name = data.chat_name
+    chat_hash = data.chat_hash
+    username = data.username
+
+    if chat_name not in rooms:
+        raise HTTPException(status_code=404, detail="Комната не найдена")
+    if chat_hash != rooms[chat_name]["password_hash"]:
+        raise HTTPException(status_code=403, detail="Неверный хэш пароля комнаты")
+    if rooms[chat_name]["creator"] != username:
+        raise HTTPException(status_code=403, detail="Только создатель может установить сессионный ключ")
+
+    for target_username, encrypted_session_key in data.encrypted_session_keys.items():
+        if target_username not in rooms[chat_name]["clients"]:
+            continue
+        rooms[chat_name]["session_keys"][target_username] = encrypted_session_key
+        target_ws = rooms[chat_name]["connections"].get(target_username)
+        if target_ws:
+            await target_ws.send_text(json.dumps({
+                "type": "session_key",
+                "encrypted_session_key": encrypted_session_key
+            }))
+
     return {"status": "success"}
 
 
@@ -215,6 +296,7 @@ async def get_updates(update: ChatUpdate):
         rooms[update.chat_name]["clients"].pop(user, None)
         rooms[update.chat_name]["ecdh_public_keys"].pop(user, None)
         rooms[update.chat_name]["session_keys"].pop(user, None)
+        rooms[update.chat_name]["connections"].pop(user, None)
 
     # Получаем новые сообщения
     new_messages = [
@@ -240,11 +322,133 @@ async def get_public_keys(request: PublicKeysRequest):
         raise HTTPException(status_code=403, detail="Неверный хэш пароля комнаты")
     if request.username not in rooms[request.chat_name]["clients"]:
         raise HTTPException(status_code=400, detail="Пользователь не зарегистрирован в комнате")
+    missing_users = [
+        u for u in rooms[request.chat_name]["clients"].keys()
+        if u not in rooms[request.chat_name]["session_keys"]
+    ]
     return {
         "status": "success",
-        "ecdh_public_keys": rooms[request.chat_name]["ecdh_public_keys"]
+        "ecdh_public_keys": rooms[request.chat_name]["ecdh_public_keys"],
+        "missing_session_keys": missing_users
     }
 
 
+@app.websocket("/ws/{chat_name}/{username}")
+async def websocket_chat(websocket: WebSocket, chat_name: str, username: str):
+    await websocket.accept()
+    if chat_name not in rooms:
+        await websocket.close(code=1008)
+        return
+
+    room = rooms[chat_name]
+    chat_password = websocket.query_params.get("chat_password", "")
+    chat_hash = websocket.query_params.get("chat_hash", "")
+    if chat_password:
+        if not bcrypt.checkpw(chat_password.encode('utf-8'), room["password_hash"].encode('utf-8')):
+            await websocket.close(code=1008)
+            return
+    else:
+        if chat_hash != room["password_hash"]:
+            await websocket.close(code=1008)
+            return
+
+    if username not in room["clients"]:
+        await websocket.close(code=1008)
+        return
+
+    existing_ws = room["connections"].get(username)
+    if existing_ws:
+        try:
+            await existing_ws.close(code=1001)
+        except Exception:
+            pass
+    room["connections"][username] = websocket
+    room["clients"][username] = time.time()
+    await _broadcast_users(room)
+
+    encrypted_session_key = room["session_keys"].get(username)
+    if encrypted_session_key:
+        await websocket.send_text(json.dumps({
+            "type": "session_key",
+            "encrypted_session_key": encrypted_session_key
+        }))
+    elif username == room.get("creator"):
+        for user in room["clients"].keys():
+            if user == username:
+                continue
+            if user not in room["session_keys"]:
+                await _send_key_request(room, user)
+    else:
+        if username not in room["session_keys"]:
+            await _send_key_request(room, username)
+
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            msg_type = data.get("type", "message")
+            if msg_type == "set_session_key":
+                if username != room.get("creator"):
+                    continue
+                target_username = data.get("target_username")
+                encrypted_session_key = data.get("encrypted_session_key")
+                if not target_username or not encrypted_session_key:
+                    continue
+                if target_username not in room["clients"]:
+                    continue
+                room["session_keys"][target_username] = encrypted_session_key
+                target_ws = room["connections"].get(target_username)
+                if target_ws:
+                    await target_ws.send_text(json.dumps({
+                        "type": "session_key",
+                        "encrypted_session_key": encrypted_session_key
+                    }))
+                continue
+            if msg_type == "request_key":
+                target_username = data.get("target_username") or username
+                if target_username in room["clients"] and target_username not in room["session_keys"]:
+                    await _send_key_request(room, target_username)
+                continue
+            ciphertext = data.get("ciphertext")
+            if not ciphertext:
+                continue
+            if username not in room["session_keys"]:
+                continue
+
+            room["clients"][username] = time.time()
+            message = {"sender": username, "ciphertext": ciphertext, "timestamp": time.time()}
+            room["messages"].append(message)
+
+            dead_users = []
+            for target_user, ws in room["connections"].items():
+                try:
+                    await ws.send_text(json.dumps({
+                        "type": "message",
+                        "sender": username,
+                        "ciphertext": ciphertext,
+                        "timestamp": message["timestamp"]
+                    }))
+                except Exception:
+                    dead_users.append(target_user)
+
+            for dead in dead_users:
+                room["connections"].pop(dead, None)
+    except WebSocketDisconnect:
+        room["connections"].pop(username, None)
+        room["clients"].pop(username, None)
+        room["ecdh_public_keys"].pop(username, None)
+        room["session_keys"].pop(username, None)
+        await _broadcast_users(room)
+    except Exception:
+        room["connections"].pop(username, None)
+        room["clients"].pop(username, None)
+        room["ecdh_public_keys"].pop(username, None)
+        room["session_keys"].pop(username, None)
+        await _broadcast_users(room)
+
+    
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000, ssl_certfile='./certs/cert.pem', ssl_keyfile='./certs/key.pem')
